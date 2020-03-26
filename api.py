@@ -1,132 +1,101 @@
-import datetime
-import os
-
-import boto3
-
-AWS_DEFAULT_REGION = os.environ["AWS_DEFAULT_REGION"]
-MAIN_BRANCH_NAME = os.getenv('MAIN_BRANCH_NAME', 'master')
-REPOSITORY_NAME = os.environ['REPOSITORY_NAME']
-SNS_TOPIC_ARN = os.environ['SNS_TOPIC_ARN']
-
-codecommit = boto3.client('codecommit')
-sns = boto3.client('sns')
+import duo_client
+import pprint
 
 
-def get_diff(repository_name, last_commit_id, previous_commit_id):
-    differences = []
-    response_iterator = None
+def connect(ikey, skey, host):
+  try:
+    print("############## CONECTANDO NO DUO ###############")
+    admin_api = duo_client.Admin(ikey=ikey, skey=skey , host=host)
+    return admin_api
+  except error:
+    print("############# ERROR NA CONEXAO")
+    print(error)
+    return False
 
-    paginator = codecommit.get_paginator('get_differences')
-
-    if previous_commit_id is None:
-        # This was the first commit (no previous, omit beforeCommitSpecifier)
-        response_iterator = paginator.paginate(
-            repositoryName=repository_name,
-            afterCommitSpecifier=last_commit_id,
+def create_user(admin_api,username, realname):
+  try:
+    print("############## CRIANDO USUARIO ###############")  
+    user = admin_api.add_user(
+        username=username, 
+        realname=realname,        
+        alias1=f'itau\{username}',
+        status = 'active'
         )
-    else:
-        response_iterator = paginator.paginate(
-            repositoryName=repository_name,
-            beforeCommitSpecifier=previous_commit_id,
-            afterCommitSpecifier=last_commit_id,
-        )
+    #pprint.pprint(user)
+    return user
+  except RuntimeError as e:
+    print("############# ERROR NA CRIACAO DO USUARIO")  
+    print(e)
+    return False
 
-    for response in response_iterator:
-        differences += response["differences"]
+def create_phone(admin_api, number):
+  try:
+    print("############## CRIANDO PHONE ###############")    
+    phone = admin_api.add_phone(number=number,type='mobile',platform='generic smartphone')
+    #pprint.pprint(phone)
+    return phone
+  except RuntimeError as e:
+    print("############# ERROR NA CRIACAO DO PHONE #############")    
+    print(e)  
 
-    return differences
+def add_user_phone(admin_api, user, phone):
+  try:
+    print("############## ADD USER NO PHONE ##########")
+    admin_api.add_user_phone(user_id=user['user_id'],phone_id=phone['phone_id']) 
+    return True
+  except RuntimeError as e:
+    print("############# ERROR ADD USER NO PHONE #############")      
+    print(e)
+    return False
 
-
-def get_diff_change_message_type(change_type):
-    type = {
-        'M': 'Modification',
-        'D': 'Deletion',
-        'A': 'Addition'
-    }
-    return type[change_type]
-
-
-def get_last_commit_id(repository, branch):
-    response = codecommit.get_branch(
-        repositoryName=repository,
-        branchName=branch
-    )
-    commit_id = response['branch']['commitId']
-    return commit_id
-
-
-def get_last_commit_log(repository, commit_id):
-    response = codecommit.get_commit(
-        repositoryName=repository, commitId=commit_id)
-
-    return response['commit']
-
-
-def get_message_text(differences, last_commit):
-    text = ''
-    commit_id = last_commit['commitId']
-    text += f'commit ID: {commit_id}\n'
-    text += 'author: {0} ({1})\n'.format(
-        last_commit['author']['name'],
-        last_commit['author']['email'])
-    date = last_commit['author']['date'].split()[0]
-    t_utc = datetime.datetime.utcfromtimestamp(int(date))
-    timestamp = t_utc.strftime('%Y-%m-%d %H:%M:%S UTC')
-    text += f'date: {timestamp}\n'
-    text += f"message: {last_commit['message']}\n"
-    for diff in differences:
-        if 'afterBlob' in diff:
-            text += 'After - File: {0} {1} - Blob ID: {2}\n'.format(
-                diff['afterBlob']['path'],
-                get_diff_change_message_type(diff['changeType']),
-                diff['afterBlob']['blobId'])
-        if 'beforeBlob' in diff:
-            text += 'Before - File: {0} {1} - Blob ID: {2}\n'.format(
-                diff['beforeBlob']['path'],
-                get_diff_change_message_type(diff['changeType']),
-                diff['beforeBlob']['blobId'])
-
-    text += (f'Commit: '
-             f'https://{AWS_DEFAULT_REGION}.console.aws.amazon.com/codesuite/'
-             f'codecommit/repositories/{REPOSITORY_NAME}/commit/{commit_id}?'
-             f'region={AWS_DEFAULT_REGION}')
-
-    return text
-
-
-def publish(repository, message):
-    sns.publish(
-        TopicArn=SNS_TOPIC_ARN,
-        Subject=f'CodeCommit Update - Repository: {repository}',
-        Message=message
-    )
-
-
-def lambda_handler(event, context):
-
+def add_user_group(admin_api,user, group_id):
     try:
-        last_commit_id = get_last_commit_id(REPOSITORY_NAME, MAIN_BRANCH_NAME)
-        last_commit = get_last_commit_log(REPOSITORY_NAME, last_commit_id)
+      print("############# ADICINANDO O USUARIO NO GROUP ################")
+      admin_api.add_user_group(user['user_id'], group_id)
+      return True
+    except RuntimeError as e:
+      print("############# ERRO AO ADICIONAR USUARIO NO GROUP #############")        
+      print(e)
+      return False
+      
+    
 
-        previous_commit_id = None
-        if len(last_commit['parents']) > 0:
-            previous_commit_id = last_commit['parents'][0]
+def send_sms(admin_api, phone):
+  try:
+    print("############# SEND SMS ################")      
+    act_sent = admin_api.send_sms_activation_to_phone(phone_id=phone['phone_id'],install='1')
+    print('SMS activation sent to', phone['number'] + ':')
+    return True
+  except RuntimeError as e:
+    print("############# ERRO NO SEND SMS #############")        
+    print(e)
+    return False
 
-        print(f'Last commit ID: {last_commit_id}')
-        print(f'Previous commit ID: {previous_commit_id}')
 
-        differences = get_diff(
-            REPOSITORY_NAME, last_commit_id, previous_commit_id)
-        message_text = get_message_text(differences, last_commit)
+ikey=""
+skey=""
+host=""
+GROUP_ID = ''
 
-        print(message_text)
 
-        return publish(REPOSITORY_NAME, message_text)
+for users in lista:
+    username = users[0].lower()
+    nome = users[1].title()
+    phone = users[2]
+    print("########## CRIANDO MFA: {0}".format(nome))
+    conn = connect(ikey, skey, host)
+    try:
+      if conn:
+         user =  create_user(conn,username, nome)     
+         if user:
+            group = add_user_group(conn, user, GROUP_ID) 
+            obj_phone = create_phone(conn, phone)
+            if obj_phone:
+               if add_user_phone(conn,user,obj_phone):
+                  send_sms(conn,obj_phone) 
+    except RuntimeError as e:
+      print("############# ERRO NO MFA #############")        
+      print(e)
+        
+   
 
-    except Exception as e:
-        import traceback
-        print(e)
-        traceback.print_exc()
-        print(f'Error getting repository {REPOSITORY_NAME}. Ensure it exists '
-              'in the same region as this function.')
-        raise e
