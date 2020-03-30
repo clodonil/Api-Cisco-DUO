@@ -12,6 +12,23 @@ def connect(ikey, skey, host):
     print(error)
     return False
 
+def pesquisa_user(admin_api, username):
+  try:
+    print(" PESQUISANDO USUARIO ".center(50, "#"))
+    s_user = admin_api.get_users_by_name(username)
+    user = s_user[0]
+    if user:
+       username  = user['username']
+       print(f' USUARIO: {username} JA EXISTE'.center(50, "#"))
+       return user
+    else:
+       print(f' USUARIO: {username} NAO EXISTE'.center(50, "#"))  
+       return False
+  except RuntimeError as e:
+    print(" ERRO NA PESQUISA DO USUARIO ".center(50, '#'))  
+    raise
+
+
 def create_user(admin_api,username, realname):
   try:
     print(" CRIANDO USUARIO ".center(50, '#'))  
@@ -85,14 +102,18 @@ for users in lista:
     conn = connect(ikey, skey, host)
     try:
       if conn:
-         user =  create_user(conn,username, nome)     
-         if user:
-            group = add_user_group(conn, user, GROUP_ID) 
-            obj_phone = create_phone(conn, phone)
-            if obj_phone:
-               if add_user_phone(conn,user,obj_phone):
-                  send_sms(conn,obj_phone) 
+         user = pesquisa_user(conn, username)
+         if not user:
+            user =  create_user(conn,username, nome)     
+            if user:
+              group = add_user_group(conn, user, GROUP_ID) 
+              obj_phone = create_phone(conn, phone)
+              if obj_phone:
+                 if add_user_phone(conn,user,obj_phone):
+                    send_sms(conn,obj_phone)
+         else:
+           obj_phone = user['phones'][0]
+           send_sms(conn,obj_phone)           
     except RuntimeError as e:
       print(" ERRO NO MFA ".center(50,'#'))        
       print(e)
-   
